@@ -1,70 +1,121 @@
 import pandas as pd
 import random
 import pathlib
+import requests
+import time
 
-# 获取项目根目录的路径（因为我们在 src/ 文件夹里，所以要往上一级）
 BASE_DIR = pathlib.Path(__file__).parent.parent
 
+
 def fetch_city_data(use_mock=True):
-    """
-    获取城市观星相关数据
-    use_mock=True 表示使用模拟数据（先跑通流程）
-    """
-    # 读取之前创建的 cities.csv 文件
     file_path = BASE_DIR / 'data' / 'cities.csv'
     df = pd.read_csv(file_path)
     
-    # 用来存放生成的数据
-    mock_data = []
+    if use_mock:
+        # ========== 模拟数据（保持原有逻辑不变） ==========
+        mock_data = []
+        for _, row in df.iterrows():
+            city = row['city']
+            elev = row['elevation']
+            
+            if elev > 3000:
+                bortle = random.randint(1, 3)
+            elif elev > 1000:
+                bortle = random.randint(2, 4)
+            elif city in ['北京', '上海', '广州', '深圳']:
+                bortle = random.randint(7, 9)
+            else:
+                bortle = random.randint(4, 6)
+            
+            if city in ['北京', '上海']:
+                aqi = random.randint(80, 180)
+            elif city in ['拉萨', '敦煌', '呼伦贝尔']:
+                aqi = random.randint(20, 60)
+            else:
+                aqi = random.randint(40, 100)
+            
+            if city in ['敦煌', '拉萨', '呼伦贝尔']:
+                cloud = random.randint(10, 40)
+            elif city in ['杭州', '广州', '成都']:
+                cloud = random.randint(50, 80)
+            else:
+                cloud = random.randint(30, 60)
+            
+            mock_data.append({
+                'city': city,
+                'lat': row['lat'],
+                'lon': row['lon'],
+                'elevation': elev,
+                'bortle': bortle,
+                'aqi': aqi,
+                'cloud_cover': cloud
+            })
+        return pd.DataFrame(mock_data)
     
-    # 逐行处理每个城市
-    for _, row in df.iterrows():
-        city = row['city']
-        elev = row['elevation']
+    else:
+        # ========== 真实 API 数据（7Timer + 模拟光污染/AQI） ==========
+        real_data = []
         
-        # ---------- 模拟光污染 (Bortle等级 1~9, 1最暗 9最亮) ----------
-        # 海拔越高，光污染越小；大城市光污染严重
-        if elev > 3000:          # 比如 拉萨
-            bortle = random.randint(1, 3)
-        elif elev > 1000:        # 比如 大理、敦煌
-            bortle = random.randint(2, 4)
-        elif city in ['北京', '上海', '广州', '深圳']:  # 超大城市
-            bortle = random.randint(7, 9)
-        else:                    # 其他城市（杭州、成都等）
-            bortle = random.randint(4, 6)
+        for _, row in df.iterrows():
+            city = row['city']
+            lat = row['lat']
+            lon = row['lon']
+            elev = row['elevation']
+            
+            # ----- 1. 获取云量（7Timer - 完全免费，无需 API Key）-----
+            try:
+                weather_url = f"https://www.7timer.info/bin/api.pl?lon={lon}&lat={lat}&product=astro&output=json"
+                response = requests.get(weather_url, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    # 7Timer 云量是 0-8 级，转换为 0-100%
+                    cloud_okta = data.get('dataseries', [{}])[0].get('cloudcover', 0)
+                    cloud = (cloud_okta / 8) * 100
+                    print(f"✅ {city} 云量获取成功: {cloud:.1f}%")
+                else:
+                    print(f"⚠️ {city} 7Timer 请求失败，使用默认值 50%")
+                    cloud = 50
+            except Exception as e:
+                print(f"❌ {city} 获取云量失败: {e}，使用默认值 50%")
+                cloud = 50
+            
+            # ----- 2. 光污染（暂时保留模拟）-----
+            # 光污染变化慢，目前没有免费实时 API，可以用模拟值
+            if elev > 3000:
+                bortle = random.randint(1, 3)
+            elif elev > 1000:
+                bortle = random.randint(2, 4)
+            elif city in ['北京', '上海', '广州', '深圳']:
+                bortle = random.randint(7, 9)
+            else:
+                bortle = random.randint(4, 6)
+            
+            # ----- 3. 空气质量（暂时保留模拟）-----
+            # 如果有 APISpace Token 可以后续接入
+            if city in ['北京', '上海']:
+                aqi = random.randint(80, 180)
+            elif city in ['拉萨', '敦煌', '呼伦贝尔']:
+                aqi = random.randint(20, 60)
+            else:
+                aqi = random.randint(40, 100)
+            
+            real_data.append({
+                'city': city,
+                'lat': lat,
+                'lon': lon,
+                'elevation': elev,
+                'bortle': bortle,
+                'aqi': aqi,
+                'cloud_cover': round(cloud, 1)
+            })
+            
+            time.sleep(0.5)  # 避免请求过快
         
-        # ---------- 模拟空气质量 AQI (数值越小空气越好) ----------
-        if city in ['北京', '上海']:
-            aqi = random.randint(80, 180)
-        elif city in ['拉萨', '敦煌', '呼伦贝尔']:
-            aqi = random.randint(20, 60)
-        else:
-            aqi = random.randint(40, 100)
-        
-        # ---------- 模拟云量 (0~100%, 数值越小天空越晴朗) ----------
-        if city in ['敦煌', '拉萨', '呼伦贝尔']:   # 西北/北方干燥少云
-            cloud = random.randint(10, 40)
-        elif city in ['杭州', '广州', '成都']:      # 南方多云
-            cloud = random.randint(50, 80)
-        else:
-            cloud = random.randint(30, 60)
-        
-        # 把生成的数据存起来
-        mock_data.append({
-            'city': city,
-            'lat': row['lat'],
-            'lon': row['lon'],
-            'elevation': elev,
-            'bortle': bortle,        # 光污染等级
-            'aqi': aqi,              # 空气质量指数
-            'cloud_cover': cloud     # 云量百分比
-        })
-    
-    return pd.DataFrame(mock_data)
+        return pd.DataFrame(real_data)
 
 
-# 测试一下（如果直接运行这个文件）
 if __name__ == '__main__':
-    df = fetch_city_data(use_mock=True)
-    print("✅ 数据获取成功！预览前5行：")
-    print(df.head())
+    # 测试真实数据模式
+    df = fetch_city_data(use_mock=False)
+    print("\n✅ 真实数据获取完成！预览：")
+    print(df[['city', 'cloud_cover', 'bortle', 'aqi']].head())
