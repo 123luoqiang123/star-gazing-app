@@ -8,11 +8,16 @@ BASE_DIR = pathlib.Path(__file__).parent.parent
 
 
 def fetch_city_data(use_mock=True):
+    """
+    获取城市观星相关数据
+    use_mock=True: 模拟数据（光污染使用真实值，其他随机）
+    use_mock=False: 真实数据（光污染从CSV读，云量从7Timer获取，AQI模拟）
+    """
     file_path = BASE_DIR / 'data' / 'cities.csv'
     df = pd.read_csv(file_path)
     
     if use_mock:
-        # ========== 模拟数据（光污染使用真实值） ==========
+        # ========== 模拟数据模式 ==========
         mock_data = []
         for _, row in df.iterrows():
             city = row['city']
@@ -49,7 +54,7 @@ def fetch_city_data(use_mock=True):
         return pd.DataFrame(mock_data)
     
     else:
-        # ========== 真实 API 数据 ==========
+        # ========== 真实 API 数据模式 ==========
         real_data = []
         
         for _, row in df.iterrows():
@@ -61,18 +66,30 @@ def fetch_city_data(use_mock=True):
             # ----- 1. 光污染直接从 CSV 读取（真实值）-----
             bortle = row['bortle']
             
-            # ----- 2. 获取云量（7Timer）-----
+            # ----- 2. 获取云量（7Timer - 完全免费，无需 API Key）-----
             try:
                 weather_url = f"https://www.7timer.info/bin/api.pl?lon={lon}&lat={lat}&product=astro&output=json"
                 response = requests.get(weather_url, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
+                    # 7Timer 云量是 0-8 级，0=晴天，8=阴天
+                    # 某些情况下可能返回 9（表示数据缺失）
                     cloud_okta = data.get('dataseries', [{}])[0].get('cloudcover', 0)
-                    cloud = (cloud_okta / 8) * 100
-                    print(f"✅ {city} 云量获取成功: {cloud:.1f}%")
+                    
+                    if cloud_okta == 9:
+                        # 数据缺失，使用默认值 50%
+                        cloud = 50
+                        print(f"⚠️ {city} 7Timer 数据缺失，使用默认值 50%")
+                    else:
+                        # 正常转换 0-8 为 0%-100%
+                        cloud = (cloud_okta / 8) * 100
+                        print(f"✅ {city} 云量获取成功: {cloud:.1f}%")
                 else:
-                    print(f"⚠️ {city} 7Timer 请求失败，使用默认值 50%")
+                    print(f"⚠️ {city} 7Timer 请求失败 (HTTP {response.status_code})，使用默认值 50%")
                     cloud = 50
+            except requests.exceptions.Timeout:
+                print(f"❌ {city} 7Timer 请求超时，使用默认值 50%")
+                cloud = 50
             except Exception as e:
                 print(f"❌ {city} 获取云量失败: {e}，使用默认值 50%")
                 cloud = 50
@@ -92,15 +109,19 @@ def fetch_city_data(use_mock=True):
                 'elevation': elev,
                 'bortle': bortle,
                 'aqi': aqi,
-                'cloud_cover': round(cloud, 1)
+                'cloud_cover': round(cloud, 1)  # 保留一位小数
             })
             
-            time.sleep(0.5)
+            time.sleep(0.5)  # 避免请求过快
         
         return pd.DataFrame(real_data)
 
 
 if __name__ == '__main__':
+    # 测试真实数据模式
+    print("=" * 50)
+    print("测试真实 API 数据模式...")
+    print("=" * 50)
     df = fetch_city_data(use_mock=False)
     print("\n✅ 数据获取完成！预览：")
-    print(df[['city', 'bortle', 'cloud_cover', 'aqi']].head())
+    print(df[['city', 'bortle', 'cloud_cover', 'aqi']].to_string(index=False))
